@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+use url::Url;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -13,14 +15,16 @@ pub enum ResponseType {
 pub struct PublicTariff {
     pub id: u64,
     pub price: u64,
-    pub duration: String,
+    #[serde(with = "humantime_serde")]
+    pub duration: Duration,
     pub description: String,
 }
-
+ 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PrivateTariff {
     pub client_price: u64,
-    pub duration: String,
+    #[serde(with = "humantime_serde")]
+    pub duration: Duration,
     pub description: String,
 }
 
@@ -29,7 +33,7 @@ pub struct Stream {
     pub user_id: Uuid,
     pub is_private: bool,
     pub settings: u64,
-    pub shard_url: String,
+    pub shard_url: Url,
     pub public_tariff: PublicTariff,
     pub private_tariff: PrivateTariff,
 }
@@ -43,7 +47,8 @@ pub struct Gift {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Debug {
-    pub duration: String,
+    #[serde(with = "humantime_serde")]
+    pub duration: Duration,
     pub at: DateTime<Utc>,
 }
 
@@ -81,12 +86,16 @@ mod tests {
         assert_eq!(request.stream.user_id.to_string(), "8d234120-0bda-49b2-b7e0-fbd3912f6cbf");
         assert_eq!(request.stream.is_private, false);
         assert_eq!(request.stream.settings, 45345);
+        assert_eq!(request.stream.shard_url.as_str(), "https://n3.example.com/sapi");
         assert_eq!(request.stream.public_tariff.id, 1);
         assert_eq!(request.stream.public_tariff.price, 100);
+        assert_eq!(request.stream.public_tariff.duration.as_secs(), 3600);
         assert_eq!(request.stream.private_tariff.client_price, 250);
+        assert_eq!(request.stream.private_tariff.duration.as_secs(), 60);
         assert_eq!(request.gifts.len(), 2);
         assert_eq!(request.gifts[0].id, 1);
         assert_eq!(request.gifts[1].price, 3);
+        assert_eq!(request.debug.duration.as_millis(), 234);
     }
 
     #[test]
