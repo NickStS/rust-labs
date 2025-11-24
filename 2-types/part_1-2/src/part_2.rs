@@ -1,98 +1,69 @@
-use serde::Deserialize;
-use std::time::Duration;
-use uuid::Uuid;
-use url::Url;
+use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct UserId(Uuid);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShardUrl(Url);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TariffId(u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Money(u64);
-
-
-impl<'de> Deserialize<'de> for UserId {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        let id = Uuid::parse_str(&s).map_err(serde::de::Error::custom)?;
-        Ok(UserId(id))
-    }
-}
-impl<'de> Deserialize<'de> for ShardUrl {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        let url = Url::parse(&s).map_err(serde::de::Error::custom)?;
-        Ok(ShardUrl(url))
-    }
-}
-impl<'de> Deserialize<'de> for TariffId {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let v = u64::deserialize(d)?;
-        Ok(TariffId(v))
-    }
-}
-impl<'de> Deserialize<'de> for Money {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let v = u64::deserialize(d)?;
-        Ok(Money(v))
-    }
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponseType {
+    Success,
+    Error,
 }
 
-
-impl Default for Money {
-    fn default() -> Self { Money(0) }
-}
-impl Default for TariffId {
-    fn default() -> Self { TariffId(0) }
-}
-
-
-fn parse_duration_str(s: &str) -> Result<Duration, String> {
-    humantime::parse_duration(s).map_err(|e| e.to_string())
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PublicTariff {
+    pub id: u64,
+    pub price: u64,
+    pub duration: String,
+    pub description: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct HumanDuration(pub Duration);
-
-impl Default for HumanDuration {
-    fn default() -> Self { HumanDuration(Duration::from_secs(0)) }
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PrivateTariff {
+    pub client_price: u64,
+    pub duration: String,
+    pub description: String,
 }
 
-impl<'de> Deserialize<'de> for HumanDuration {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        let dur = parse_duration_str(&s).map_err(serde::de::Error::custom)?;
-        Ok(HumanDuration(dur))
-    }
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Stream {
+    pub user_id: Uuid,
+    pub is_private: bool,
+    pub settings: u64,
+    pub shard_url: String,
+    pub public_tariff: PublicTariff,
+    pub private_tariff: PrivateTariff,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Gift {
+    pub id: u64,
+    pub price: u64,
+    pub description: String,
+}
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Debug {
+    pub duration: String,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Request {
-    #[serde(default, alias = "userId", alias = "user_id", alias = "user-id")]
-    pub user_id: Option<UserId>,
+    #[serde(rename = "type")]
+    pub response_type: ResponseType,
+    pub stream: Stream,
+    pub gifts: Vec<Gift>,
+    pub debug: Debug,
+}
 
-    #[serde(default, alias = "shardUrl", alias = "shard_url", alias = "shard-url")]
-    pub shard: Option<ShardUrl>,
+impl Request {
+    pub fn from_json(json_str: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json_str)
+    }
 
-    #[serde(default, alias = "createdAt", alias = "created_at")]
-    pub created_at: Option<DateTime<Utc>>,
-
-    #[serde(default)]
-    pub ttl: HumanDuration,
-
-    #[serde(default, alias = "tariffId", alias = "tariff_id")]
-    pub tariff_id: Option<TariffId>,
-
-    #[serde(default)]
-    pub amount: Money,
+    pub fn to_toml(&self) -> Result<String, String> {
+        toml::to_string(self).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -101,12 +72,35 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn parse_ok() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../request.json");
-        let data = fs::read_to_string(path).expect("request.json");
-        let req: Request = serde_json::from_str(&data).expect("parse");
+    fn parse_request_json() {
+        let json_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../request.json");
+        let json_data = fs::read_to_string(json_path).expect("Failed to read request.json");
+        
+        let request = Request::from_json(&json_data).expect("Failed to parse JSON");
+        
+        assert_eq!(request.stream.user_id.to_string(), "8d234120-0bda-49b2-b7e0-fbd3912f6cbf");
+        assert_eq!(request.stream.is_private, false);
+        assert_eq!(request.stream.settings, 45345);
+        assert_eq!(request.stream.public_tariff.id, 1);
+        assert_eq!(request.stream.public_tariff.price, 100);
+        assert_eq!(request.stream.private_tariff.client_price, 250);
+        assert_eq!(request.gifts.len(), 2);
+        assert_eq!(request.gifts[0].id, 1);
+        assert_eq!(request.gifts[1].price, 3);
+    }
 
-        assert!(req.ttl.0.as_secs() >= 0);
-        assert!(req.amount.0 >= 0);
+    #[test]
+    fn convert_to_toml() {
+        let json_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../request.json");
+        let json_data = fs::read_to_string(json_path).expect("Failed to read request.json");
+        
+        let request = Request::from_json(&json_data).expect("Failed to parse JSON");
+        let toml_str = request.to_toml().expect("Failed to convert to TOML");
+        
+        assert!(toml_str.contains("response_type"));
+        assert!(toml_str.contains("user_id"));
+        assert!(toml_str.contains("8d234120-0bda-49b2-b7e0-fbd3912f6cbf"));
+        
+        println!("\n=== TOML Output ===\n{}", toml_str);
     }
 }

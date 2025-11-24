@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone)]
 pub struct PostCommon {
     pub id: u64,
@@ -20,8 +19,13 @@ pub struct Deleted(pub PostCommon);
 
 impl New {
     pub fn new(id: u64, title: impl Into<String>, body: impl Into<String>) -> Self {
-        Self(PostCommon { id, title: title.into(), body: body.into() })
+        Self(PostCommon {
+            id,
+            title: title.into(),
+            body: body.into(),
+        })
     }
+
     pub fn publish(self) -> Unmoderated {
         Unmoderated(self.0)
     }
@@ -31,9 +35,11 @@ impl Unmoderated {
     pub fn allow(self) -> Published {
         Published(self.0)
     }
+
     pub fn deny(self) -> Deleted {
         Deleted(self.0)
     }
+
     pub fn delete(self) -> Deleted {
         Deleted(self.0)
     }
@@ -48,6 +54,7 @@ impl Published {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn flow_allow_publish() {
         let new = New::new(1, "Hello", "Body");
