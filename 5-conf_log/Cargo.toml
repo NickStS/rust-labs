@@ -2,3 +2,8 @@
 name = "assignment-5"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
