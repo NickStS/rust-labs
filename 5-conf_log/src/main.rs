@@ -1,9 +1,7 @@
-use std::env;
 use std::error::Error;
-use std::fs;
-use std::path::PathBuf;
 
 use clap::Parser;
+use config::{Config as ConfigBuilder, Environment, File};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -273,101 +271,33 @@ struct Cli {
     conf: String,
 }
 
-fn parse_bool(s: &str) -> Result<bool, Box<dyn Error>> {
-    let lower = s.to_ascii_lowercase();
-    if lower == "1" || lower == "true" || lower == "yes" || lower == "on" {
-        return Ok(true);
-    }
-    if lower == "0" || lower == "false" || lower == "no" || lower == "off" {
-        return Ok(false);
-    }
-    Err(format!("invalid boolean value '{s}'").into())
-}
-
-fn apply_env_overrides(cfg: &mut Config) -> Result<(), Box<dyn Error>> {
-    for (key, value) in env::vars() {
-        if !key.starts_with("CONF_") {
-            continue;
-        }
-        let name = &key["CONF_".len()..];
-        match name {
-            "MODE_DEBUG" => {
-                cfg.mode.debug = parse_bool(&value)?;
-            }
-            "SERVER_EXTERNAL_URL" => {
-                cfg.server.external_url = value;
-            }
-            "SERVER_HTTP_PORT" => {
-                cfg.server.http_port = value.parse()?;
-            }
-            "SERVER_GRPC_PORT" => {
-                cfg.server.grpc_port = value.parse()?;
-            }
-            "SERVER_HEALTHZ_PORT" => {
-                cfg.server.healthz_port = value.parse()?;
-            }
-            "SERVER_METRICS_PORT" => {
-                cfg.server.metrics_port = value.parse()?;
-            }
-            "DB_MYSQL_HOST" => {
-                cfg.db.mysql.host = value;
-            }
-            "DB_MYSQL_PORT" => {
-                cfg.db.mysql.port = value.parse()?;
-            }
-            "DB_MYSQL_DATING" => {
-                cfg.db.mysql.dating = value;
-            }
-            "DB_MYSQL_USER" => {
-                cfg.db.mysql.user = value;
-            }
-            "DB_MYSQL_PASS" => {
-                cfg.db.mysql.pass = value;
-            }
-            "DB_MYSQL_CONNECTIONS_MAX_IDLE" => {
-                cfg.db.mysql.connections.max_idle = value.parse()?;
-            }
-            "DB_MYSQL_CONNECTIONS_MAX_OPEN" => {
-                cfg.db.mysql.connections.max_open = value.parse()?;
-            }
-            "LOG_APP_LEVEL" => {
-                cfg.log.app.level = value;
-            }
-            "BACKGROUND_WATCHDOG_PERIOD" => {
-                cfg.background.watchdog.period = value;
-            }
-            "BACKGROUND_WATCHDOG_LIMIT" => {
-                cfg.background.watchdog.limit = value.parse()?;
-            }
-            "BACKGROUND_WATCHDOG_LOCK_TIMEOUT" => {
-                cfg.background.watchdog.lock_timeout = value;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
-    let mut cfg = Config::default();
-    let path_buf = PathBuf::from(path);
-    if path_buf.exists() {
-        let content = fs::read_to_string(&path_buf)?;
-        if !content.trim().is_empty() {
-            let from_file: Config = toml::from_str(&content)?;
-            cfg = from_file;
-        }
-    }
-    apply_env_overrides(&mut cfg)?;
+    let builder = ConfigBuilder::builder()
+        // Слой 1: Дефолтные значения
+        .add_source(config::Config::try_from(&Config::default())?)
+        // Слой 2: Файл конфигурации (если существует)
+        .add_source(File::with_name(path).required(false))
+        // Слой 3: Переменные окружения с префиксом CONF_
+        .add_source(
+            Environment::with_prefix("CONF")
+                .separator("_")
+                .try_parsing(true),
+        )
+        .build()?;
+
+    let cfg: Config = builder.try_deserialize()?;
     Ok(cfg)
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let mut cfg = load_config(&cli.conf)?;
+
+    // CLI флаг имеет наивысший приоритет
     if cli.debug {
         cfg.mode.debug = true;
     }
+
     println!("{:#?}", cfg);
     Ok(())
 }
