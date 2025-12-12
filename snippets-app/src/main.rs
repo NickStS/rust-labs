@@ -5,12 +5,9 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use reqwest::blocking::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info};
-use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -28,18 +25,14 @@ enum AppError {
     },
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
-    #[error("http error when requesting {url}: {source}")]
-    Http {
-        url: String,
-        #[source]
-        source: reqwest::Error,
-    },
     #[error("snippet '{0}' not found")]
     NotFound(String),
     #[error("invalid storage config: {0}")]
     InvalidConfig(String),
     #[error("invalid arguments: {0}")]
     InvalidArgs(String),
+    #[error("invalid data in storage: {0}")]
+    InvalidData(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +101,6 @@ impl JsonStorage {
 
 impl SnippetStorage for JsonStorage {
     fn create(&mut self, name: &str, content: &str) -> Result<(), AppError> {
-        info!("create snippet '{name}'");
         let mut snippets = self.load_all()?;
         snippets.retain(|s| s.name != name);
         snippets.push(Snippet {
@@ -120,7 +112,6 @@ impl SnippetStorage for JsonStorage {
     }
 
     fn read(&self, name: &str) -> Result<Snippet, AppError> {
-        info!("read snippet '{name}'");
         let snippets = self.load_all()?;
         snippets
             .into_iter()
@@ -129,7 +120,6 @@ impl SnippetStorage for JsonStorage {
     }
 
     fn delete(&mut self, name: &str) -> Result<(), AppError> {
-        info!("delete snippet '{name}'");
         let mut snippets = self.load_all()?;
         let before = snippets.len();
         snippets.retain(|s| s.name != name);
@@ -140,7 +130,6 @@ impl SnippetStorage for JsonStorage {
     }
 
     fn list(&self) -> Result<Vec<Snippet>, AppError> {
-        info!("list snippets");
         let mut snippets = self.load_all()?;
         snippets.sort_by_key(|s| s.created_at);
         Ok(snippets)
@@ -149,6 +138,7 @@ impl SnippetStorage for JsonStorage {
 
 struct SqliteStorage {
     conn: Connection,
+    path: PathBuf,
 }
 
 impl SqliteStorage {
@@ -161,7 +151,7 @@ impl SqliteStorage {
                 })?;
             }
         }
-        let conn = Connection::open(path)?;
+        let conn = Connection::open(path.clone())?;
         conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS snippets (
@@ -172,13 +162,12 @@ impl SqliteStorage {
             "#,
             [],
         )?;
-        Ok(Self { conn })
+        Ok(Self { conn, path })
     }
 }
 
 impl SnippetStorage for SqliteStorage {
     fn create(&mut self, name: &str, content: &str) -> Result<(), AppError> {
-        info!("create snippet '{name}'");
         let created_at = Utc::now().to_rfc3339();
         self.conn.execute(
             r#"
@@ -188,13 +177,12 @@ impl SnippetStorage for SqliteStorage {
                 content = excluded.content,
                 created_at = excluded.created_at
             "#,
-            params![name, content, created_at],
+            params![name, content, &created_at],
         )?;
         Ok(())
     }
 
     fn read(&self, name: &str) -> Result<Snippet, AppError> {
-        info!("read snippet '{name}'");
         let mut stmt = self.conn.prepare(
             r#"
             SELECT name, content, created_at
@@ -228,7 +216,6 @@ impl SnippetStorage for SqliteStorage {
     }
 
     fn delete(&mut self, name: &str) -> Result<(), AppError> {
-        info!("delete snippet '{name}'");
         let rows = self.conn.execute(
             r#"
             DELETE FROM snippets
@@ -243,7 +230,6 @@ impl SnippetStorage for SqliteStorage {
     }
 
     fn list(&self) -> Result<Vec<Snippet>, AppError> {
-        info!("list snippets");
         let mut stmt = self.conn.prepare(
             r#"
             SELECT name, content, created_at
@@ -285,11 +271,11 @@ enum StorageConfig {
 fn parse_storage_spec(spec: &str) -> Result<StorageConfig, AppError> {
     let (kind, path) = spec
         .split_once(':')
-        .ok_or_else(|| AppError::InvalidConfig("expected format KIND:/path/to/file".into()))?;
-    let path_buf = PathBuf::from(path);
+        .ok_or_else(|| AppError::InvalidConfig("expected KIND:/path/to/file".into()))?;
+    let path = PathBuf::from(path);
     match kind {
-        "JSON" => Ok(StorageConfig::Json(path_buf)),
-        "SQLITE" => Ok(StorageConfig::Sqlite(path_buf)),
+        "JSON" => Ok(StorageConfig::Json(path)),
+        "SQLITE" => Ok(StorageConfig::Sqlite(path)),
         other => Err(AppError::InvalidConfig(format!(
             "unknown storage kind '{other}', expected JSON or SQLITE"
         ))),
@@ -307,87 +293,6 @@ fn build_storage() -> Result<Box<dyn SnippetStorage>, AppError> {
     Ok(Box::new(JsonStorage::new(PathBuf::from("snippets.json"))))
 }
 
-#[derive(Clone)]
-struct FileMakeWriter {
-    path: Option<PathBuf>,
-}
-
-struct FileWriter {
-    path: Option<PathBuf>,
-}
-
-impl<'a> MakeWriter<'a> for FileMakeWriter {
-    type Writer = FileWriter;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        FileWriter {
-            path: self.path.clone(),
-        }
-    }
-}
-
-impl std::io::Write for FileWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        use std::io::Write;
-        if let Some(path) = &self.path {
-            if let Ok(mut f) = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = f.write_all(buf);
-            }
-        }
-        std::io::stderr().write_all(buf)?;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        std::io::stderr().flush()
-    }
-}
-
-fn init_tracing() {
-    let level_str = env::var("SNIPPETS_APP_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
-    let lower = level_str.to_ascii_lowercase();
-    let level = match lower.as_str() {
-        "error" => tracing::Level::ERROR,
-        "warn" => tracing::Level::WARN,
-        "debug" => tracing::Level::DEBUG,
-        "trace" => tracing::Level::TRACE,
-        _ => tracing::Level::INFO,
-    };
-    let path = env::var("SNIPPETS_APP_LOG_PATH")
-        .ok()
-        .map(PathBuf::from);
-    let make_writer = FileMakeWriter { path };
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_writer(make_writer)
-        .with_target(false)
-        .try_init();
-}
-
-fn download_snippet(url: &str) -> Result<String, AppError> {
-    let client = Client::new();
-    let resp = client
-        .get(url)
-        .send()
-        .map_err(|source| AppError::Http {
-            url: url.to_string(),
-            source,
-        })?;
-    let resp = resp.error_for_status().map_err(|source| AppError::Http {
-        url: url.to_string(),
-        source,
-    })?;
-    let body = resp.text().map_err(|source| AppError::Http {
-        url: url.to_string(),
-        source,
-    })?;
-    Ok(body)
-}
-
 #[derive(Debug, Parser)]
 #[command(name = "snippets-app")]
 #[command(about = "Simple CLI for storing code snippets")]
@@ -400,15 +305,12 @@ struct Cli {
     delete: Option<String>,
     #[arg(long)]
     list: bool,
-    #[arg(long)]
-    download: Option<String>,
 }
 
-fn run() -> Result<(), AppError> {
-    init_tracing();
+fn real_main() -> Result<(), AppError> {
     let cli = Cli::parse();
-    debug!("cli args: {:?}", cli);
     let mut storage = build_storage()?;
+
     let mut actions = 0;
     if cli.name.is_some() {
         actions += 1;
@@ -427,39 +329,32 @@ fn run() -> Result<(), AppError> {
             "exactly one of --name / --read / --delete / --list must be provided".into(),
         ));
     }
-    if cli.download.is_some() && cli.name.is_none() {
-        return Err(AppError::InvalidArgs(
-            "--download can be used only together with --name".into(),
-        ));
-    }
+
     if let Some(name) = cli.name {
-        let content = if let Some(url) = cli.download.as_deref() {
-            info!("downloading snippet from '{url}'");
-            download_snippet(url)?
-        } else {
-            let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf).map_err(|source| {
-                AppError::Io {
-                    path: PathBuf::from("<stdin>"),
-                    source,
-                }
-            })?;
-            buf
-        };
-        storage.create(&name, &content)?;
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf).map_err(|source| {
+            AppError::Io {
+                path: PathBuf::from("<stdin>"),
+                source,
+            }
+        })?;
+        storage.create(&name, &buf)?;
         println!("Snippet '{name}' created");
         return Ok(());
     }
+
     if let Some(name) = cli.read {
         let snippet = storage.read(&name)?;
         println!("{}", snippet.content);
         return Ok(());
     }
+
     if let Some(name) = cli.delete {
         storage.delete(&name)?;
         println!("Snippet '{name}' deleted");
         return Ok(());
     }
+
     if cli.list {
         let snippets = storage.list()?;
         for s in snippets {
@@ -467,11 +362,12 @@ fn run() -> Result<(), AppError> {
         }
         return Ok(());
     }
+
     Ok(())
 }
 
 fn main() {
-    if let Err(err) = run() {
+    if let Err(err) = real_main() {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
