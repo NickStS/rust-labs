@@ -476,3 +476,210 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn unique_temp_path(ext: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut p = std::env::temp_dir();
+        p.push(format!("snippets_app_test_{nanos}.{ext}"));
+        p
+    }
+
+    fn read_file_to_string(path: &PathBuf) -> String {
+        fs::read_to_string(path).unwrap_or_else(|_| "".to_string())
+    }
+
+    #[test]
+    fn json_storage_crud_and_persist() {
+        let path = unique_temp_path("json");
+        let mut storage = JsonStorage::new(path.clone());
+
+        storage.create("a", "one").unwrap();
+        let sn = storage.read("a").unwrap();
+        assert_eq!(sn.name, "a");
+        assert_eq!(sn.content, "one");
+
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "a");
+
+        let file_data = read_file_to_string(&path);
+        assert!(!file_data.trim().is_empty());
+        let parsed: Vec<Snippet> = serde_json::from_str(&file_data).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "a");
+
+        storage.delete("a").unwrap();
+        assert!(matches!(storage.read("a"), Err(AppError::NotFound(_))));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn json_storage_overwrite_same_name() {
+        let path = unique_temp_path("json");
+        let mut storage = JsonStorage::new(path.clone());
+
+        storage.create("x", "v1").unwrap();
+        storage.create("x", "v2").unwrap();
+
+        let sn = storage.read("x").unwrap();
+        assert_eq!(sn.content, "v2");
+
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "x");
+        assert_eq!(listed[0].content, "v2");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn json_storage_list_sorted_by_created_at() {
+        let path = unique_temp_path("json");
+        let mut storage = JsonStorage::new(path.clone());
+
+        storage.create("first", "1").unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        storage.create("second", "2").unwrap();
+
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "first");
+        assert_eq!(listed[1].name, "second");
+        assert!(listed[0].created_at <= listed[1].created_at);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_storage_crud() {
+        let path = unique_temp_path("sqlite");
+        let mut storage = SqliteStorage::new(path.clone()).unwrap();
+
+        storage.create("a", "one").unwrap();
+        let sn = storage.read("a").unwrap();
+        assert_eq!(sn.name, "a");
+        assert_eq!(sn.content, "one");
+
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "a");
+
+        storage.delete("a").unwrap();
+        assert!(matches!(storage.read("a"), Err(AppError::NotFound(_))));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_storage_overwrite_same_name() {
+        let path = unique_temp_path("sqlite");
+        let mut storage = SqliteStorage::new(path.clone()).unwrap();
+
+        storage.create("x", "v1").unwrap();
+        storage.create("x", "v2").unwrap();
+
+        let sn = storage.read("x").unwrap();
+        assert_eq!(sn.content, "v2");
+
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "x");
+        assert_eq!(listed[0].content, "v2");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_storage_spec_json_and_sqlite() {
+        let cfg = parse_storage_spec("JSON:/tmp/a.json").unwrap();
+        match cfg {
+            StorageConfig::Json(p) => assert!(p.to_string_lossy().contains("a.json")),
+            _ => panic!("expected JSON"),
+        }
+
+        let cfg = parse_storage_spec("SQLITE:/tmp/a.sqlite").unwrap();
+        match cfg {
+            StorageConfig::Sqlite(p) => assert!(p.to_string_lossy().contains("a.sqlite")),
+            _ => panic!("expected SQLITE"),
+        }
+
+        assert!(parse_storage_spec("BAD:/tmp/x").is_err());
+        assert!(parse_storage_spec("NO_COLON").is_err());
+    }
+
+    #[test]
+fn build_storage_uses_env_storage_spec() {
+    let _g = env_guard();
+    let old = std::env::var("SNIPPETS_APP_STORAGE").ok();
+
+    let path = unique_temp_path("json");
+    unsafe {
+        std::env::set_var("SNIPPETS_APP_STORAGE", format!("JSON:{}", path.to_string_lossy()));
+    }
+
+    let mut s = build_storage().unwrap();
+    s.create("a", "one").unwrap();
+    let sn = s.read("a").unwrap();
+    assert_eq!(sn.content, "one");
+
+    if let Some(v) = old {
+        unsafe {
+            std::env::set_var("SNIPPETS_APP_STORAGE", v);
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("SNIPPETS_APP_STORAGE");
+        }
+    }
+
+    let _ = fs::remove_file(path);
+}
+
+    #[test]
+    fn download_snippet_from_local_http() {
+        use tiny_http::{Response, Server};
+
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let addr = server.server_addr().to_string();
+        let url = format!("http://{addr}/");
+
+        let handle = std::thread::spawn(move || {
+            if let Ok(req) = server.recv() {
+                let resp = Response::from_string("hello_from_http");
+                let _ = req.respond(resp);
+            }
+        });
+
+        let body = download_snippet(&url).unwrap();
+        assert_eq!(body, "hello_from_http");
+
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn cli_parsing_download_requires_name() {
+        let res = Cli::try_parse_from(["snippets-app", "--download", "http://example.com"]);
+        assert!(res.is_ok());
+        let cli = res.unwrap();
+        assert!(cli.download.is_some());
+        assert!(cli.name.is_none());
+    }
+}
+
