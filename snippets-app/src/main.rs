@@ -1,3 +1,17 @@
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::missing_crate_level_docs)]
+#![deny(unreachable_pub)]
+#![deny(clippy::missing_panics_doc)]
+#![deny(clippy::clone_on_ref_ptr)]
+#![deny(clippy::similar_names)]
+
+
+//! `snippets-app` — CLI приложение для хранения и чтения сниппетов.
+//!
+//! Поддерживает JSON и SQLite хранилища, логирование и загрузку сниппетов по URL.
+
+
 use std::env;
 use std::fs;
 use std::io::{self, Read};
@@ -6,7 +20,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use reqwest::blocking::Client;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, info};
@@ -93,11 +107,10 @@ impl JsonStorage {
                 })?;
             }
         }
-        let data =
-            serde_json::to_string_pretty(snippets).map_err(|source| AppError::Json {
-                path: self.path.clone(),
-                source,
-            })?;
+        let data = serde_json::to_string_pretty(snippets).map_err(|source| AppError::Json {
+            path: self.path.clone(),
+            source,
+        })?;
         fs::write(&self.path, data).map_err(|source| AppError::Io {
             path: self.path.clone(),
             source,
@@ -330,11 +343,7 @@ impl std::io::Write for FileWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         use std::io::Write;
         if let Some(path) = &self.path {
-            if let Ok(mut f) = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
+            if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
                 let _ = f.write_all(buf);
             }
         }
@@ -357,9 +366,7 @@ fn init_tracing() {
         "trace" => tracing::Level::TRACE,
         _ => tracing::Level::INFO,
     };
-    let path = env::var("SNIPPETS_APP_LOG_PATH")
-        .ok()
-        .map(PathBuf::from);
+    let path = env::var("SNIPPETS_APP_LOG_PATH").ok().map(PathBuf::from);
     let make_writer = FileMakeWriter { path };
     let _ = tracing_subscriber::fmt()
         .with_max_level(level)
@@ -370,13 +377,10 @@ fn init_tracing() {
 
 fn download_snippet(url: &str) -> Result<String, AppError> {
     let client = Client::new();
-    let resp = client
-        .get(url)
-        .send()
-        .map_err(|source| AppError::Http {
-            url: url.to_string(),
-            source,
-        })?;
+    let resp = client.get(url).send().map_err(|source| AppError::Http {
+        url: url.to_string(),
+        source,
+    })?;
     let resp = resp.error_for_status().map_err(|source| AppError::Http {
         url: url.to_string(),
         source,
@@ -438,12 +442,12 @@ fn run() -> Result<(), AppError> {
             download_snippet(url)?
         } else {
             let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf).map_err(|source| {
-                AppError::Io {
+            io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|source| AppError::Io {
                     path: PathBuf::from("<stdin>"),
                     source,
-                }
-            })?;
+                })?;
             buf
         };
         storage.create(&name, &content)?;
@@ -625,32 +629,35 @@ mod tests {
     }
 
     #[test]
-fn build_storage_uses_env_storage_spec() {
-    let _g = env_guard();
-    let old = std::env::var("SNIPPETS_APP_STORAGE").ok();
+    fn build_storage_uses_env_storage_spec() {
+        let _g = env_guard();
+        let old = std::env::var("SNIPPETS_APP_STORAGE").ok();
 
-    let path = unique_temp_path("json");
-    unsafe {
-        std::env::set_var("SNIPPETS_APP_STORAGE", format!("JSON:{}", path.to_string_lossy()));
-    }
-
-    let mut s = build_storage().unwrap();
-    s.create("a", "one").unwrap();
-    let sn = s.read("a").unwrap();
-    assert_eq!(sn.content, "one");
-
-    if let Some(v) = old {
+        let path = unique_temp_path("json");
         unsafe {
-            std::env::set_var("SNIPPETS_APP_STORAGE", v);
+            std::env::set_var(
+                "SNIPPETS_APP_STORAGE",
+                format!("JSON:{}", path.to_string_lossy()),
+            );
         }
-    } else {
-        unsafe {
-            std::env::remove_var("SNIPPETS_APP_STORAGE");
-        }
-    }
 
-    let _ = fs::remove_file(path);
-}
+        let mut s = build_storage().unwrap();
+        s.create("a", "one").unwrap();
+        let sn = s.read("a").unwrap();
+        assert_eq!(sn.content, "one");
+
+        if let Some(v) = old {
+            unsafe {
+                std::env::set_var("SNIPPETS_APP_STORAGE", v);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("SNIPPETS_APP_STORAGE");
+            }
+        }
+
+        let _ = fs::remove_file(path);
+    }
 
     #[test]
     fn download_snippet_from_local_http() {
@@ -682,4 +689,3 @@ fn build_storage_uses_env_storage_spec() {
         assert!(cli.name.is_none());
     }
 }
-
