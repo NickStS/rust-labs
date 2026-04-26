@@ -1,0 +1,13 @@
+[package]
+name = "lab4"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+image = "0.25"
+clap = { version = "4", features = ["derive"] }
+aws-sdk-s3 = "1"
+aws-config = "1"
+tokio = { version = "1", features = ["rt"] }
+thiserror = "1"
