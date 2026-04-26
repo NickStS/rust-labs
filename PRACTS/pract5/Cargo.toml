@@ -1,0 +1,21 @@
+[package]
+name = "pract5"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "matrix"
+path = "src/bin/matrix.rs"
+
+[[bin]]
+name = "encrypt"
+path = "src/bin/encrypt.rs"
+
+[dependencies]
+rayon = "1"
+crossbeam-channel = "0.5"
+aes-gcm = "0.10"
+walkdir = "2"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+anyhow = "1"
