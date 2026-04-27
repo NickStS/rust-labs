@@ -1,0 +1,15 @@
+[package]
+name = "web-downloader"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "web-downloader"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync"] }
+reqwest = "0.12"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+futures = "0.3"
